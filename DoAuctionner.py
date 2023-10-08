@@ -1,3 +1,4 @@
+import json
 import requests
 from bs4 import BeautifulSoup
 import getpass
@@ -80,6 +81,46 @@ def extract_auction_data_from_source(source_code):
         "auction_buy_button": auctionbb 
     }
 
+def get_auction_data(session, category, server):
+    url = f"https://{server}.darkorbit.com/ajax/auction.php"
+    data = {
+        "command": "getAuctionList",
+        "category": category,
+        "list": "current"
+    }
+
+    response = session.post(url, data=data)
+    data = json.loads(response.text)
+
+    html_content = data.get('code', '')
+    soup = BeautifulSoup(html_content, 'html.parser')
+
+    items = []
+    item_rows = soup.find_all(class_="auctionItemRow")
+    auctionbb_element = soup.find('input', {'name': 'auction_buy_button'})
+    auctionbb = auctionbb_element.get('value', None) if auctionbb_element else None
+
+    for idx, row in enumerate(item_rows):
+        item = {}
+        item['index'] = idx + 1
+        item['name'] = row.find('td', class_='auction_item_name_col').text.strip()
+        item['highest_bidder'] = row.find('td', class_='auction_item_highest').text.strip()
+        item['current_bid'] = row.find('td', class_='auction_item_current').text.strip()
+        item['your_bid'] = '-'
+        loot_id_input = row.find("input", id=lambda x: x and x.endswith("_lootId"))
+        item['loot_id'] = loot_id_input["value"] if loot_id_input else None
+        
+        items.append(item)
+
+    countdowns = soup.find_all(class_="countdown_item")
+    time_left = {countdown.get('id').replace("countdown_", ""): countdown.text.strip() for countdown in countdowns}
+
+    return {
+        "items": items,
+        "time_left": time_left,
+        "auction_buy_button": auctionbb 
+    }
+
 def display_table(data):
     table = PrettyTable()
     table.field_names = ["Number", "Item Name", "Top Bidder", "Bid", "Your Bid", "Loot ID"]
@@ -108,7 +149,7 @@ def get_user_bids(auction_data):
 
 
 
-def place_bid(session, server, bids, delay):
+def place_bid(session, server, bids, delay, auctionType):
     for bid in bids:
         auction_url = f"https://{server}.darkorbit.com/indexInternal.es?action=internalAuction"
         response = session.get(auction_url)
@@ -125,10 +166,10 @@ def place_bid(session, server, bids, delay):
         bid_url = f"https://{server}.darkorbit.com/indexInternal.es?action=internalAuction&reloadToken=" + reload_token_value
         data = {
             "reloadToken": reload_token_value,
-            "auctionType": "hour",
+            "auctionType": auctionType,
             "subAction": "bid",
             "lootId": bid["item"]["loot_id"],
-            "itemId": f"item_hour_{bid['item']['index']}",
+            "itemId": f"item_{auctionType}_{bid['item']['index']}", 
             "credits": bid["amount"],
             "auction_buy_button": auction_data.get("auction_buy_button")
         }
@@ -146,17 +187,29 @@ def main():
     username, password = get_user_input()
     sid, server, session, reload_token_value = obtain_sid(username, password)  
     print(f"SID: {sid}")
-    #print(f"Server: {server}")
-    #print(f"Reload Token: {reload_token_value}")
+    option = input("Which auction do you want to bet on? (1. Hour, 2. Day, 3. Week): ")
 
-    auction_url = f"https://{server}.darkorbit.com/indexInternal.es?action=internalAuction"
-    response = session.get(auction_url)
-    auction_data = extract_auction_data_from_source(response.text)
-    
+    if option == "1":
+        category = "hour"
+        auction_url = f"https://{server}.darkorbit.com/indexInternal.es?action=internalAuction"
+        response = session.get(auction_url)
+        auction_data = extract_auction_data_from_source(response.text)
+    elif option == "2":
+        category = "day"
+        auction_data = get_auction_data(session, category, server) 
+    elif option == "3":
+        category = "week"
+        auction_data = get_auction_data(session, category, server) 
+    else:
+        print("Wrong option. You need to select numers 1,2 or 3")
+        return
+
+    print(f"Tabla de '{category}':")
     display_table(auction_data)
 
     user_bids, delay = get_user_bids(auction_data) 
-    place_bid(session, server, user_bids, delay)  
+    place_bid(session, server, user_bids, delay, category) 
+   
     
     input("Press any key and then 'Enter' to close...")
 
